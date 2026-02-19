@@ -467,14 +467,46 @@
       // Update hashscan footer link
       document.getElementById('hashscan-link').href = `${hashscan}/token/${raw}`;
 
-      // 2. Fetch top 50 balances (order=desc gives highest first)
-      setStatus('<span class="spinner"></span>Fetching top 50 holders…', 'loading');
-      const balRes = await fetch(`${base}/api/v1/tokens/${raw}/balances?order=desc&limit=50`);
-      if (!balRes.ok) {
-        throw new Error(`Mirror node error ${balRes.status} while fetching balances.`);
+      // 2. Paginate through ALL holders, sort by balance desc, take top 50.
+      //    The Mirror Node orders by account ID — there is no server-side sort by
+      //    balance — so we must collect every page and sort client-side.
+      const PAGE_SIZE = 100;          // max allowed by the API
+      const PAGE_CAP  = 200;          // safety cap: 200 × 100 = 20 000 holders
+      let allBalances = [];
+      let nextUrl = `${base}/api/v1/tokens/${raw}/balances?limit=${PAGE_SIZE}`;
+      let pagesFetched = 0;
+      let cappedEarly = false;
+
+      while (nextUrl) {
+        pagesFetched++;
+        setStatus(
+          `<span class="spinner"></span>Fetching holders… page ${pagesFetched} (${allBalances.length} collected)`,
+          'loading'
+        );
+
+        const balRes = await fetch(nextUrl);
+        if (!balRes.ok) {
+          throw new Error(`Mirror node error ${balRes.status} while fetching balances.`);
+        }
+        const balData = await balRes.json();
+        const page = balData.balances ?? [];
+        allBalances = allBalances.concat(page);
+
+        const nextPath = balData.links?.next ?? null;
+        nextUrl = nextPath ? `${base}${nextPath}` : null;
+
+        if (pagesFetched >= PAGE_CAP && nextUrl) {
+          cappedEarly = true;
+          nextUrl = null;
+        }
       }
-      const balData = await balRes.json();
-      const balances = balData.balances ?? [];
+
+      // Sort all holders by balance descending, then slice top 50
+      allBalances.sort((a, b) => {
+        const diff = BigInt(b.balance) - BigInt(a.balance);
+        return diff > 0n ? 1 : diff < 0n ? -1 : 0;
+      });
+      const balances = allBalances.slice(0, 50);
 
       if (balances.length === 0) {
         document.getElementById('table-container').innerHTML =
@@ -487,7 +519,13 @@
       document.getElementById('table-container').innerHTML =
         buildTable(balances, decimals, totalSupply, network);
 
-      setStatus(`Showing top ${balances.length} holder${balances.length !== 1 ? 's' : ''} for <strong>${tokenData.name || raw}</strong> (${tokenData.symbol || ''})`, 'ok');
+      const cappedNote = cappedEarly
+        ? ` <span style="color:var(--muted)">(sampled first ${PAGE_CAP * PAGE_SIZE} holders — token has more)</span>`
+        : '';
+      setStatus(
+        `Top 50 of <strong>${allBalances.length.toLocaleString()}</strong> total holders for <strong>${tokenData.name || raw}</strong> (${tokenData.symbol || ''})${cappedNote}`,
+        'ok'
+      );
 
     } catch (err) {
       setStatus(err.message, 'error');
