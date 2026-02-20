@@ -739,8 +739,18 @@
       );
       if (!res.ok) return;
       const data = await res.json();
-      const htsId = data.platforms?.['hedera-hashgraph'];
-      if (htsId) {
+      let htsId = data.platforms?.['hedera-hashgraph'];
+      if (!htsId) return;
+
+      // CoinGecko often returns an EVM hex address instead of 0.0.X format.
+      // The Mirror Node accepts EVM addresses and returns the native token_id.
+      if (/^0x[0-9a-f]{40}$/i.test(htsId)) {
+        const mRes = await fetch(`${MIRROR_NODES.mainnet}/api/v1/tokens/${htsId}`);
+        if (!mRes.ok) return;
+        htsId = (await mRes.json()).token_id;
+      }
+
+      if (htsId && /^\d+\.\d+\.\d+$/.test(htsId)) {
         document.getElementById('token-input').value = htsId;
         queryToken();
       }
