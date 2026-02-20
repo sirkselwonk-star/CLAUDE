@@ -39,6 +39,22 @@
       letter-spacing: -0.02em;
     }
     header h1 span { color: var(--accent); }
+    .beta-badge {
+      display: inline-block;
+      font-size: 0.55rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #d29922;
+      background: #d2992220;
+      border: 1px solid #d2992255;
+      border-radius: 4px;
+      padding: 2px 6px;
+      vertical-align: middle;
+      margin-left: 0.5rem;
+      position: relative;
+      top: -3px;
+    }
     header p {
       color: var(--muted);
       margin-top: 0.4rem;
@@ -260,7 +276,7 @@
 <body>
 
 <header>
-  <h1>Hedera <span>Token Holder</span> Dashboard</h1>
+  <h1>Hedera <span>Token Holder</span> Dashboard<span class="beta-badge">Beta</span></h1>
   <p>Query the top 50 wallets holding any HTS token</p>
 </header>
 
