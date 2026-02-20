@@ -361,7 +361,7 @@
   <div id="top-tokens-scroll" class="top-tokens-scroll">
     <div class="top-tokens-msg"><span class="spinner"></span>Loading…</div>
   </div>
-  <div class="top-tokens-source">Data via <a href="https://saucerswap.finance" target="_blank" rel="noopener">SaucerSwap</a> &middot; sparklines show recent price trend</div>
+  <div class="top-tokens-source">Data via <a href="https://www.coingecko.com" target="_blank" rel="noopener">CoinGecko</a> &middot; sparklines show 7-day hourly price</div>
 </section>
 
 <div class="network-toggle">
@@ -636,8 +636,8 @@
     }
   }
 
-  // ── Top Tokens by 24h Volume (SaucerSwap) ──────────────────────────────────
-  const SAUCER = 'https://api.saucerswap.finance';
+  // ── Top Tokens by 24h Volume (CoinGecko) ───────────────────────────────────
+  const COINGECKO = 'https://api.coingecko.com/api/v3';
 
   function fmtUsd(v) {
     if (v === null || v === undefined || isNaN(v)) return '—';
@@ -686,83 +686,40 @@
   }
 
   async function loadTopTokens() {
-    const scroll   = document.getElementById('top-tokens-scroll');
-    const btn      = document.getElementById('top-tokens-refresh');
+    const scroll = document.getElementById('top-tokens-scroll');
+    const btn    = document.getElementById('top-tokens-refresh');
     scroll.innerHTML = '<div class="top-tokens-msg"><span class="spinner"></span>Loading…</div>';
     if (btn) btn.disabled = true;
 
     try {
-      const [tRes, dRes] = await Promise.all([
-        fetch(`${SAUCER}/tokens`),
-        fetch(`${SAUCER}/tokens/daily`),
-      ]);
-      if (!tRes.ok) throw new Error(`Tokens API ${tRes.status}`);
-      if (!dRes.ok) throw new Error(`Daily API ${dRes.status}`);
+      const res = await fetch(
+        `${COINGECKO}/coins/markets?vs_currency=usd&category=hedera-ecosystem` +
+        `&order=volume_desc&per_page=10&page=1&sparkline=true&price_change_percentage=24h`
+      );
+      if (res.status === 429) throw new Error('Rate limited — try again shortly');
+      if (!res.ok) throw new Error(`CoinGecko API ${res.status}`);
+      const tokens = await res.json();
+      if (!tokens.length) throw new Error('No token data returned');
 
-      const tokens = await tRes.json();   // [{id, symbol, name, priceUsd, price, ...}]
-      const daily  = await dRes.json();   // [{tokenId, timestampSeconds, price, volume, liquidity}, ...]
-
-      // Group daily entries by tokenId, sorted oldest→newest
-      const byToken = {};
-      for (const e of daily) {
-        if (!byToken[e.tokenId]) byToken[e.tokenId] = [];
-        byToken[e.tokenId].push(e);
-      }
-      for (const tid in byToken) {
-        byToken[tid].sort((a, b) => a.timestampSeconds - b.timestampSeconds);
-      }
-
-      // Build enriched list
-      const enriched = tokens.map(t => {
-        const history = byToken[t.id] || [];
-        const latest  = history[history.length - 1];
-        return {
-          id:           t.id,
-          symbol:       t.symbol  || '?',
-          name:         t.name    || '',
-          priceUsd:     parseFloat(t.priceUsd ?? 0),
-          volume:       BigInt(latest?.volume    || 0),
-          priceHistory: history.map(h => parseFloat(h.price) || 0).filter(v => v > 0),
-        };
-      });
-
-      const top10 = enriched
-        .filter(t => t.volume > 0n)
-        .sort((a, b) => (a.volume < b.volume ? 1 : a.volume > b.volume ? -1 : 0))
-        .slice(0, 10);
-
-      if (!top10.length) throw new Error('No volume data returned');
-
-      // Compute 24h price change from first vs last history entry
-      top10.forEach(t => {
-        const h = t.priceHistory;
-        if (h.length >= 2) {
-          t.change24h = ((h[h.length - 1] - h[0]) / h[0]) * 100;
-        } else {
-          t.change24h = 0;
-        }
-      });
-
-      scroll.innerHTML = top10.map((t, i) => {
-        const isPos  = t.change24h >= 0;
-        const spark  = buildSparkSVG(t.priceHistory, isPos);
-        const chgCls = isPos ? 'up' : 'down';
-        // Approximate USD volume: volume is in raw token units of HBAR side.
-        // Show formatted raw volume as proxy — label clearly.
-        const volLabel = t.volume > 0n
-          ? fmtUsd(Number(t.volume) / 1e8)   // rough HBAR-units → readable
-          : '—';
+      scroll.innerHTML = tokens.map((t, i) => {
+        const chg    = t.price_change_percentage_24h ?? 0;
+        const isPos  = chg >= 0;
+        // Subsample 168 hourly points → ~24 for a clean sparkline
+        const raw    = t.sparkline_in_7d?.price ?? [];
+        const step   = Math.max(1, Math.floor(raw.length / 24));
+        const prices = raw.filter((_, j) => j % step === 0);
+        const spark  = buildSparkSVG(prices, isPos);
         return `
-          <div class="token-card" onclick="useTopToken('${t.id}')" title="Query ${t.symbol}">
+          <div class="token-card" onclick="useTopToken('${t.id}')" title="Click to query ${t.name}">
             <div class="token-card-top">
-              <span class="tc-symbol">${t.symbol}</span>
+              <span class="tc-symbol">${t.symbol.toUpperCase()}</span>
               <span class="tc-rank">#${i + 1}</span>
             </div>
             <div class="tc-name">${t.name}</div>
             <div class="tc-spark">${spark}</div>
-            <div class="tc-price">${fmtUsd(t.priceUsd)}</div>
-            <div class="tc-change ${chgCls}">${fmtPct(t.change24h)}</div>
-            <div class="tc-vol">${volLabel} vol</div>
+            <div class="tc-price">${fmtUsd(t.current_price)}</div>
+            <div class="tc-change ${isPos ? 'up' : 'down'}">${fmtPct(chg)}</div>
+            <div class="tc-vol">${fmtUsd(t.total_volume)} vol</div>
           </div>`;
       }).join('');
 
@@ -773,10 +730,21 @@
     }
   }
 
-  function useTopToken(tokenId) {
-    if (!tokenId) return;
-    document.getElementById('token-input').value = tokenId;
-    queryToken();
+  async function useTopToken(coinId) {
+    if (!coinId) return;
+    try {
+      // Resolve the Hedera token ID (0.0.XXXXXX) from CoinGecko coin details
+      const res = await fetch(
+        `${COINGECKO}/coins/${coinId}?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false`
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const htsId = data.platforms?.['hedera-hashgraph'];
+      if (htsId) {
+        document.getElementById('token-input').value = htsId;
+        queryToken();
+      }
+    } catch { /* clicking is a bonus; silently ignore failures */ }
   }
 
   loadTopTokens();
