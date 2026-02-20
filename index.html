@@ -263,6 +263,79 @@
     .empty-state svg { opacity: 0.25; margin-bottom: 1rem; }
     .empty-state p { font-size: 0.9rem; }
 
+    /* ── Top Tokens Section ── */
+    .top-tokens-section {
+      max-width: 860px;
+      margin: 0 auto 2rem;
+    }
+    .top-tokens-hdr {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.6rem;
+    }
+    .top-tokens-hdr .section-label {
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+    }
+    .top-tokens-hdr .refresh-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 0.78rem;
+      padding: 2px 8px;
+      transition: color 0.1s, border-color 0.1s;
+    }
+    .top-tokens-hdr .refresh-btn:hover { color: var(--text); border-color: var(--muted); }
+    .top-tokens-hdr .refresh-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .top-tokens-scroll {
+      display: flex;
+      gap: 0.55rem;
+      overflow-x: auto;
+      padding-bottom: 0.3rem;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    .token-card {
+      flex: 0 0 auto;
+      width: 148px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.7rem 0.75rem 0.6rem;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+      user-select: none;
+    }
+    .token-card:hover { border-color: var(--accent); background: var(--row-hover); }
+    .token-card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 0.15rem;
+    }
+    .tc-symbol { font-weight: 700; font-size: 0.88rem; color: var(--text); }
+    .tc-rank   { font-size: 0.65rem; color: var(--muted); font-weight: 600; padding-top: 1px; }
+    .tc-name   { font-size: 0.68rem; color: var(--muted); margin-bottom: 0.45rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tc-spark  { margin-bottom: 0.45rem; line-height: 0; border-radius: 3px; overflow: hidden; }
+    .tc-price  { font-size: 0.82rem; font-weight: 600; color: var(--text); margin-bottom: 0.18rem; }
+    .tc-change { font-size: 0.72rem; font-weight: 700; }
+    .tc-change.up   { color: var(--green); }
+    .tc-change.down { color: var(--red); }
+    .tc-vol    { font-size: 0.64rem; color: var(--muted); margin-top: 0.1rem; }
+    .top-tokens-msg {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.82rem; color: var(--muted); padding: 1.2rem 0;
+    }
+    .top-tokens-err { font-size: 0.8rem; color: var(--red); padding: 0.75rem 0; }
+    .top-tokens-source { font-size: 0.67rem; color: var(--muted); margin-top: 0.35rem; text-align: right; }
+    .top-tokens-source a { color: var(--muted); text-decoration: underline; }
+
     /* ── Footer ── */
     footer {
       text-align: center;
@@ -279,6 +352,17 @@
   <h1>Hedera <span>Token Holder</span> Dashboard<span class="beta-badge">Beta</span></h1>
   <p>Query the top 50 wallets holding any HTS token</p>
 </header>
+
+<section class="top-tokens-section" id="top-tokens-section">
+  <div class="top-tokens-hdr">
+    <span class="section-label">Top 10 HTS Tokens &middot; 24h Volume</span>
+    <button class="refresh-btn" id="top-tokens-refresh" onclick="loadTopTokens()">&#x21bb; Refresh</button>
+  </div>
+  <div id="top-tokens-scroll" class="top-tokens-scroll">
+    <div class="top-tokens-msg"><span class="spinner"></span>Loading…</div>
+  </div>
+  <div class="top-tokens-source">Data via <a href="https://saucerswap.finance" target="_blank" rel="noopener">SaucerSwap</a> &middot; sparklines show recent price trend</div>
+</section>
 
 <div class="network-toggle">
   <span>Network:</span>
@@ -551,6 +635,151 @@
       btn.disabled = false;
     }
   }
+
+  // ── Top Tokens by 24h Volume (SaucerSwap) ──────────────────────────────────
+  const SAUCER = 'https://api.saucerswap.finance';
+
+  function fmtUsd(v) {
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    if (v >= 1e9) return '$' + (v / 1e9).toFixed(2) + 'B';
+    if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+    if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'K';
+    if (v >= 1)   return '$' + v.toFixed(2);
+    return '$' + v.toPrecision(4);
+  }
+
+  function fmtPct(v) {
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    return (v >= 0 ? '▲ +' : '▼ ') + Math.abs(v).toFixed(2) + '%';
+  }
+
+  function buildSparkSVG(prices, isPos) {
+    const color = isPos ? '#3fb950' : '#f85149';
+    const W = 136, H = 36;
+    if (!prices || prices.length < 2) {
+      const y1 = H / 2, y2 = isPos ? H * 0.3 : H * 0.7;
+      return `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+        <line x1="0" y1="${y1}" x2="${W}" y2="${y2}" stroke="${color}" stroke-width="1.8" stroke-linecap="round" opacity="0.9"/>
+      </svg>`;
+    }
+    const min = Math.min(...prices), max = Math.max(...prices);
+    const range = max - min || 1;
+    const pad = 3;
+    const pts = prices.map((p, i) => {
+      const x = (i / (prices.length - 1)) * W;
+      const y = H - pad - ((p - min) / range) * (H - pad * 2);
+      return [x.toFixed(1), y.toFixed(1)];
+    });
+    const polyline = pts.map(p => p.join(',')).join(' ');
+    const fillPts = `${pts[0][0]},${H} ` + polyline + ` ${pts[pts.length - 1][0]},${H}`;
+    const uid = 'sg' + Math.random().toString(36).slice(2, 7);
+    return `<svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="${uid}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${color}" stop-opacity="0.3"/>
+          <stop offset="100%" stop-color="${color}" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <polygon points="${fillPts}" fill="url(#${uid})"/>
+      <polyline points="${polyline}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>
+    </svg>`;
+  }
+
+  async function loadTopTokens() {
+    const scroll   = document.getElementById('top-tokens-scroll');
+    const btn      = document.getElementById('top-tokens-refresh');
+    scroll.innerHTML = '<div class="top-tokens-msg"><span class="spinner"></span>Loading…</div>';
+    if (btn) btn.disabled = true;
+
+    try {
+      const [tRes, dRes] = await Promise.all([
+        fetch(`${SAUCER}/tokens`),
+        fetch(`${SAUCER}/tokens/daily`),
+      ]);
+      if (!tRes.ok) throw new Error(`Tokens API ${tRes.status}`);
+      if (!dRes.ok) throw new Error(`Daily API ${dRes.status}`);
+
+      const tokens = await tRes.json();   // [{id, symbol, name, priceUsd, price, ...}]
+      const daily  = await dRes.json();   // [{tokenId, timestampSeconds, price, volume, liquidity}, ...]
+
+      // Group daily entries by tokenId, sorted oldest→newest
+      const byToken = {};
+      for (const e of daily) {
+        if (!byToken[e.tokenId]) byToken[e.tokenId] = [];
+        byToken[e.tokenId].push(e);
+      }
+      for (const tid in byToken) {
+        byToken[tid].sort((a, b) => a.timestampSeconds - b.timestampSeconds);
+      }
+
+      // Build enriched list
+      const enriched = tokens.map(t => {
+        const history = byToken[t.id] || [];
+        const latest  = history[history.length - 1];
+        return {
+          id:           t.id,
+          symbol:       t.symbol  || '?',
+          name:         t.name    || '',
+          priceUsd:     parseFloat(t.priceUsd ?? 0),
+          volume:       BigInt(latest?.volume    || 0),
+          priceHistory: history.map(h => parseFloat(h.price) || 0).filter(v => v > 0),
+        };
+      });
+
+      const top10 = enriched
+        .filter(t => t.volume > 0n)
+        .sort((a, b) => (a.volume < b.volume ? 1 : a.volume > b.volume ? -1 : 0))
+        .slice(0, 10);
+
+      if (!top10.length) throw new Error('No volume data returned');
+
+      // Compute 24h price change from first vs last history entry
+      top10.forEach(t => {
+        const h = t.priceHistory;
+        if (h.length >= 2) {
+          t.change24h = ((h[h.length - 1] - h[0]) / h[0]) * 100;
+        } else {
+          t.change24h = 0;
+        }
+      });
+
+      scroll.innerHTML = top10.map((t, i) => {
+        const isPos  = t.change24h >= 0;
+        const spark  = buildSparkSVG(t.priceHistory, isPos);
+        const chgCls = isPos ? 'up' : 'down';
+        // Approximate USD volume: volume is in raw token units of HBAR side.
+        // Show formatted raw volume as proxy — label clearly.
+        const volLabel = t.volume > 0n
+          ? fmtUsd(Number(t.volume) / 1e8)   // rough HBAR-units → readable
+          : '—';
+        return `
+          <div class="token-card" onclick="useTopToken('${t.id}')" title="Query ${t.symbol}">
+            <div class="token-card-top">
+              <span class="tc-symbol">${t.symbol}</span>
+              <span class="tc-rank">#${i + 1}</span>
+            </div>
+            <div class="tc-name">${t.name}</div>
+            <div class="tc-spark">${spark}</div>
+            <div class="tc-price">${fmtUsd(t.priceUsd)}</div>
+            <div class="tc-change ${chgCls}">${fmtPct(t.change24h)}</div>
+            <div class="tc-vol">${volLabel} vol</div>
+          </div>`;
+      }).join('');
+
+    } catch (err) {
+      scroll.innerHTML = `<span class="top-tokens-err">Could not load: ${err.message}</span>`;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function useTopToken(tokenId) {
+    if (!tokenId) return;
+    document.getElementById('token-input').value = tokenId;
+    queryToken();
+  }
+
+  loadTopTokens();
 
   // Allow Enter key to trigger query
   document.getElementById('token-input').addEventListener('keydown', (e) => {
