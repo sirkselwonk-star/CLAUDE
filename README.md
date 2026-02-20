@@ -89,7 +89,7 @@ npx serve .
 python3 -m http.server 8080
 ```
 
-**[Launch the tool →](https://sirkselwonk-star.github.io/CLAUDE/)**
+**[Launch the tool →](https://sirkselwonk-star.github.io/HEDERA.TOKEN/)**
 
 ---
 
