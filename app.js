@@ -1,11 +1,56 @@
 const MIRROR_NODES = {
-  mainnet: 'https://mainnet-public.mirrornode.hedera.com',
-  testnet: 'https://testnet.mirrornode.hedera.com',
+  mainnet: [
+    'https://mainnet-public.mirrornode.hedera.com',
+    'https://mainnet.hashio.io',
+  ],
+  testnet: [
+    'https://testnet.mirrornode.hedera.com',
+    'https://testnet.hashio.io',
+  ],
 };
+// Tracks the currently active node index per network (sticky for the session).
+const mirrorNodeIndex = { mainnet: 0, testnet: 0 };
 const HASHSCAN_BASE = {
   mainnet: 'https://hashscan.io/mainnet',
   testnet: 'https://hashscan.io/testnet',
 };
+
+// Fetch from a mirror node with automatic failover.
+// Cycles through MIRROR_NODES[network] starting at the current sticky index.
+// Returns the Response on success (including 404). Throws if all nodes fail.
+async function fetchMirrorNode(network, path) {
+  const nodes = MIRROR_NODES[network];
+  const start = mirrorNodeIndex[network];
+
+  for (let offset = 0; offset < nodes.length; offset++) {
+    const idx = (start + offset) % nodes.length;
+    let res;
+    try {
+      res = await fetch(nodes[idx] + path);
+    } catch {
+      continue; // network-level error — try next node
+    }
+
+    // 404 = resource genuinely not found; no point cycling to another node.
+    if (res.status === 404) {
+      mirrorNodeIndex[network] = idx;
+      return res;
+    }
+
+    // Server errors or rate-limiting — try the next node.
+    if (res.status >= 500 || res.status === 429) {
+      if (offset > 0) console.info(`[mirror] fell back to node ${idx} (${nodes[idx]}) for ${network}`);
+      continue;
+    }
+
+    // Any other response is a valid reply from this node; make it sticky.
+    mirrorNodeIndex[network] = idx;
+    if (offset > 0) console.info(`[mirror] fell back to node ${idx} (${nodes[idx]}) for ${network}`);
+    return res;
+  }
+
+  throw new Error(`All mirror nodes failed for ${network}. Please try again later.`);
+}
 
 function getNetwork() {
   return document.querySelector('input[name="network"]:checked').value;
@@ -105,7 +150,6 @@ async function queryToken() {
   }
 
   const network = getNetwork();
-  const base = MIRROR_NODES[network];
   const hashscan = HASHSCAN_BASE[network];
   const btn = document.getElementById('query-btn');
   btn.disabled = true;
@@ -117,7 +161,7 @@ async function queryToken() {
 
   try {
     // 1. Fetch token metadata
-    const tokenRes = await fetch(`${base}/api/v1/tokens/${raw}`);
+    const tokenRes = await fetchMirrorNode(network, `/api/v1/tokens/${raw}`);
     if (!tokenRes.ok) {
       if (tokenRes.status === 404) throw new Error(`Token ${raw} not found on ${network}.`);
       throw new Error(`Mirror node error ${tokenRes.status} while fetching token info.`);
@@ -146,18 +190,18 @@ async function queryToken() {
     const PAGE_SIZE = 100;          // max allowed by the API
     const PAGE_CAP  = 200;          // safety cap: 200 × 100 = 20 000 holders
     let allBalances = [];
-    let nextUrl = `${base}/api/v1/tokens/${raw}/balances?limit=${PAGE_SIZE}`;
+    let nextPath = `/api/v1/tokens/${raw}/balances?limit=${PAGE_SIZE}`;
     let pagesFetched = 0;
     let cappedEarly = false;
 
-    while (nextUrl) {
+    while (nextPath) {
       pagesFetched++;
       setStatus(
         `<span class="spinner"></span>Fetching holders… page ${pagesFetched} (${allBalances.length} collected)`,
         'loading'
       );
 
-      const balRes = await fetch(nextUrl);
+      const balRes = await fetchMirrorNode(network, nextPath);
       if (!balRes.ok) {
         throw new Error(`Mirror node error ${balRes.status} while fetching balances.`);
       }
@@ -165,12 +209,12 @@ async function queryToken() {
       const page = balData.balances ?? [];
       allBalances = allBalances.concat(page);
 
-      const nextPath = balData.links?.next ?? null;
-      nextUrl = nextPath ? `${base}${nextPath}` : null;
+      // links.next is already a root-relative path — use it directly.
+      nextPath = balData.links?.next ?? null;
 
-      if (pagesFetched >= PAGE_CAP && nextUrl) {
+      if (pagesFetched >= PAGE_CAP && nextPath) {
         cappedEarly = true;
-        nextUrl = null;
+        nextPath = null;
       }
     }
 
@@ -318,7 +362,7 @@ async function useTopToken(coinId) {
     // CoinGecko often returns an EVM hex address instead of 0.0.X format.
     // The Mirror Node accepts EVM addresses and returns the native token_id.
     if (/^0x[0-9a-f]{40}$/i.test(htsId)) {
-      const mRes = await fetch(`${MIRROR_NODES.mainnet}/api/v1/tokens/${htsId}`);
+      const mRes = await fetchMirrorNode('mainnet', `/api/v1/tokens/${htsId}`);
       if (!mRes.ok) return;
       htsId = (await mRes.json()).token_id;
     }
