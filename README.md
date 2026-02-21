@@ -126,15 +126,6 @@ GET /api/v1/tokens/{evmAddress}
 
 ---
 
-## Connect
-
-Got feedback? Found a bug? Think something could be sharper?
-
-- Open an issue
-- Drop a pull request
-- Or just explore and let the data speak
-
----
 
 <div align="center">
 
