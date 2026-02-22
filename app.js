@@ -327,7 +327,7 @@ async function loadTopTokens() {
       const prices = raw.filter((_, j) => j % step === 0);
       const spark  = buildSparkSVG(prices, isPos);
       return `
-        <div class="token-card" onclick="useTopToken('${t.id}', '${t.symbol}')" title="Click to query ${t.name}">
+        <div class="token-card" data-idx="${i}">
           <div class="token-card-top">
             <span class="tc-symbol">${t.symbol.toUpperCase()}</span>
             <span class="tc-rank">#${i + 1}</span>
@@ -339,6 +339,13 @@ async function loadTopTokens() {
           <div class="tc-vol">${fmtUsd(t.total_volume)} vol</div>
         </div>`;
     }).join('');
+
+    // Attach click handlers after rendering so token data is captured in a
+    // closure — no inline onclick means no HTML-encoding issues with any
+    // token ID or symbol containing special characters.
+    scroll.querySelectorAll('.token-card').forEach((card, i) => {
+      card.addEventListener('click', () => useTopToken(tokens[i].id, tokens[i].symbol));
+    });
 
   } catch (err) {
     scroll.innerHTML = `<span class="top-tokens-err">Could not load: ${err.message}</span>`;
