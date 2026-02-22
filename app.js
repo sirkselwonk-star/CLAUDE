@@ -347,31 +347,63 @@ async function loadTopTokens() {
   }
 }
 
+// Cache resolved CoinGecko coinId → HTS token ID so each coin is only fetched once.
+const htsIdCache = {};
+
 async function useTopToken(coinId) {
   if (!coinId) return;
+
+  // Use cached value immediately — no extra API call needed.
+  if (htsIdCache[coinId]) {
+    document.getElementById('token-input').value = htsIdCache[coinId];
+    queryToken();
+    return;
+  }
+
+  setStatus('<span class="spinner"></span>Resolving token…', 'loading');
+
   try {
     // Resolve the Hedera token ID (0.0.XXXXXX) from CoinGecko coin details
     const res = await fetch(
       `${COINGECKO}/coins/${coinId}?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false`
     );
-    if (!res.ok) return;
+    if (res.status === 429) {
+      setStatus('CoinGecko rate limited — please wait a moment and try again.', 'error');
+      return;
+    }
+    if (!res.ok) {
+      setStatus(`Could not resolve token (CoinGecko ${res.status}).`, 'error');
+      return;
+    }
     const data = await res.json();
     let htsId = data.platforms?.['hedera-hashgraph'];
-    if (!htsId) return;
+    if (!htsId) {
+      setStatus('No Hedera token ID found for this token on CoinGecko.', 'error');
+      return;
+    }
 
     // CoinGecko often returns an EVM hex address instead of 0.0.X format.
     // The Mirror Node accepts EVM addresses and returns the native token_id.
     if (/^0x[0-9a-f]{40}$/i.test(htsId)) {
-      const mRes = await fetchMirrorNode('mainnet', `/api/v1/tokens/${htsId}`);
-      if (!mRes.ok) return;
+      const network = getNetwork();
+      const mRes = await fetchMirrorNode(network, `/api/v1/tokens/${htsId}`);
+      if (!mRes.ok) {
+        setStatus('Could not resolve EVM address to a Hedera token ID.', 'error');
+        return;
+      }
       htsId = (await mRes.json()).token_id;
     }
 
     if (htsId && /^\d+\.\d+\.\d+$/.test(htsId)) {
+      htsIdCache[coinId] = htsId; // cache so subsequent clicks are instant
       document.getElementById('token-input').value = htsId;
       queryToken();
+    } else {
+      setStatus('Could not determine a valid Hedera token ID for this token.', 'error');
     }
-  } catch { /* clicking is a bonus; silently ignore failures */ }
+  } catch (err) {
+    setStatus('Failed to resolve token: ' + err.message, 'error');
+  }
 }
 
 loadTopTokens();
