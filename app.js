@@ -327,7 +327,7 @@ async function loadTopTokens() {
       const prices = raw.filter((_, j) => j % step === 0);
       const spark  = buildSparkSVG(prices, isPos);
       return `
-        <div class="token-card" onclick="useTopToken('${t.id}')" title="Click to query ${t.name}">
+        <div class="token-card" onclick="useTopToken('${t.id}', '${t.symbol}')" title="Click to query ${t.name}">
           <div class="token-card-top">
             <span class="tc-symbol">${t.symbol.toUpperCase()}</span>
             <span class="tc-rank">#${i + 1}</span>
@@ -350,7 +350,9 @@ async function loadTopTokens() {
 // Cache resolved CoinGecko coinId → HTS token ID so each coin is only fetched once.
 const htsIdCache = {};
 
-async function useTopToken(coinId) {
+// symbol is passed from the card onclick so we can fall back to Mirror Node
+// search if CoinGecko doesn't have the platforms field populated for that token.
+async function useTopToken(coinId, symbol) {
   if (!coinId) return;
 
   // Use cached value immediately — no extra API call needed.
@@ -362,36 +364,48 @@ async function useTopToken(coinId) {
 
   setStatus('<span class="spinner"></span>Resolving token…', 'loading');
 
+  const network = getNetwork();
+  let htsId = null;
+
   try {
-    // Resolve the Hedera token ID (0.0.XXXXXX) from CoinGecko coin details
+    // Step 1 — try CoinGecko platform data.
+    // CoinGecko doesn't always have platforms['hedera-hashgraph'] filled in,
+    // so treat any failure here as a non-fatal miss and fall through to step 2.
     const res = await fetch(
       `${COINGECKO}/coins/${coinId}?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false`
     );
-    if (res.status === 429) {
-      setStatus('CoinGecko rate limited — please wait a moment and try again.', 'error');
-      return;
-    }
-    if (!res.ok) {
-      setStatus(`Could not resolve token (CoinGecko ${res.status}).`, 'error');
-      return;
-    }
-    const data = await res.json();
-    let htsId = data.platforms?.['hedera-hashgraph'];
-    if (!htsId) {
-      setStatus('No Hedera token ID found for this token on CoinGecko.', 'error');
-      return;
+    if (res.ok) {
+      const data = await res.json();
+      const platformId = data.platforms?.['hedera-hashgraph'];
+      if (platformId) {
+        if (/^0x[0-9a-f]{40}$/i.test(platformId)) {
+          // EVM hex address — resolve to native 0.0.X via Mirror Node
+          const mRes = await fetchMirrorNode(network, `/api/v1/tokens/${platformId}`);
+          if (mRes.ok) htsId = (await mRes.json()).token_id;
+        } else if (/^\d+\.\d+\.\d+$/.test(platformId)) {
+          htsId = platformId;
+        }
+      }
     }
 
-    // CoinGecko often returns an EVM hex address instead of 0.0.X format.
-    // The Mirror Node accepts EVM addresses and returns the native token_id.
-    if (/^0x[0-9a-f]{40}$/i.test(htsId)) {
-      const network = getNetwork();
-      const mRes = await fetchMirrorNode(network, `/api/v1/tokens/${htsId}`);
-      if (!mRes.ok) {
-        setStatus('Could not resolve EVM address to a Hedera token ID.', 'error');
-        return;
+    // Step 2 — fall back to Mirror Node symbol search when CoinGecko didn't
+    // return a usable platform address (field missing, rate-limited, etc.).
+    if (!htsId && symbol) {
+      const sym = encodeURIComponent(symbol.toUpperCase());
+      const sRes = await fetchMirrorNode(network, `/api/v1/tokens?symbol=${sym}&limit=25`);
+      if (sRes.ok) {
+        const sData = await sRes.json();
+        const matches = (sData.tokens ?? []).filter(t => t.type === 'FUNGIBLE_COMMON' && !t.deleted);
+        if (matches.length > 0) {
+          // Pick the token with the largest total supply — most likely to be the
+          // canonical one when multiple tokens share the same symbol.
+          matches.sort((a, b) => {
+            const diff = BigInt(b.total_supply ?? '0') - BigInt(a.total_supply ?? '0');
+            return diff > 0n ? 1 : diff < 0n ? -1 : 0;
+          });
+          htsId = matches[0].token_id;
+        }
       }
-      htsId = (await mRes.json()).token_id;
     }
 
     if (htsId && /^\d+\.\d+\.\d+$/.test(htsId)) {
@@ -399,7 +413,7 @@ async function useTopToken(coinId) {
       document.getElementById('token-input').value = htsId;
       queryToken();
     } else {
-      setStatus('Could not determine a valid Hedera token ID for this token.', 'error');
+      setStatus(`Could not find a Hedera token ID for ${symbol || coinId}.`, 'error');
     }
   } catch (err) {
     setStatus('Failed to resolve token: ' + err.message, 'error');
